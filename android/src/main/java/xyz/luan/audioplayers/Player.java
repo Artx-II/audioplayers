@@ -23,7 +23,7 @@ abstract class Player {
 
     abstract int setRate(double rate);
 
-    abstract void configAttributes(boolean respectSilence, boolean stayAwake, Context context);
+    abstract void configAttributes(boolean respectSilence, boolean stayAwake, Context context, boolean isRespectingAudioFocus);
 
     abstract void setReleaseMode(ReleaseMode releaseMode);
 
@@ -35,6 +35,7 @@ abstract class Player {
 
     abstract void setPlayingRoute(String playingRoute, Context context);
 
+    abstract boolean isRespectingAudioFocus();
     /**
      * Seek operations cannot be called until after the player is ready.
      */

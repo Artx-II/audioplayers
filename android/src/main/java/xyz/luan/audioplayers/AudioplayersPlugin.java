@@ -3,6 +3,11 @@ package xyz.luan.audioplayers;
 import android.os.Build;
 import android.content.Context;
 import android.os.Handler;
+import android.media.AudioManager;
+import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
+import android.os.Build;
+import android.content.Context;
 
 import java.lang.ref.WeakReference;
 import java.util.HashMap;
@@ -25,6 +30,10 @@ public class AudioplayersPlugin implements MethodCallHandler {
     private Runnable positionUpdates;
     private final Context context;
     private boolean seekFinish;
+    private final Map<String, Boolean> respectAudioFocuses = new HashMap<>();
+    private final Map<String, AudioManager> audioManagers = new HashMap<>();
+    private AudioAttributes mPlaybackAttributes;
+    private AudioFocusRequest mFocusRequest;
 
     public static void registerWith(final Registrar registrar) {
         final MethodChannel channel = new MethodChannel(registrar.messenger(), "xyz.luan/audioplayers");
@@ -48,6 +57,7 @@ public class AudioplayersPlugin implements MethodCallHandler {
         }
     }
 
+    @SuppressWarnings( "deprecation" )
     private void handleMethodCall(final MethodCall call, final MethodChannel.Result response) {
         final String playerId = call.argument("playerId");
         final String mode = call.argument("mode");
@@ -60,9 +70,14 @@ public class AudioplayersPlugin implements MethodCallHandler {
                 final boolean respectSilence = call.argument("respectSilence");
                 final boolean isLocal = call.argument("isLocal");
                 final boolean stayAwake = call.argument("stayAwake");
-                player.configAttributes(respectSilence, stayAwake, context.getApplicationContext());
-                player.setVolume(volume);
+                final boolean respectAudioFocus = call.argument("respectAudioFocus");
+                if(respectAudioFocus){
+                    AudioManager manager = initAudioManger();
+                    audioManagers.put(player.getPlayerId(),manager); 
+                }
                 player.setUrl(url, isLocal, context.getApplicationContext());
+                player.configAttributes(respectSilence, stayAwake, activity.getApplicationContext(), respectAudioFocus);
+                player.setVolume(volume);
                 if (position != null && !mode.equals("PlayerMode.LOW_LATENCY")) {
                     player.seek(position);
                 }
@@ -70,14 +85,32 @@ public class AudioplayersPlugin implements MethodCallHandler {
                 break;
             }
             case "resume": {
+                AudioManager manager = initAudioManger();
+                audioManagers.put(player.getPlayerId(),manager);
                 player.play(context.getApplicationContext());
                 break;
             }
             case "pause": {
+                if(audioManagers.get(player.getPlayerId()) != null){
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        audioManagers.get(player.getPlayerId()).abandonAudioFocusRequest(mFocusRequest);
+                    }else{
+                        audioManagers.get(player.getPlayerId()).abandonAudioFocus(audioFocusChangeListener);
+                    }
+                    audioManagers.remove(player.getPlayerId());
+                }
                 player.pause();
                 break;
             }
             case "stop": {
+                if(audioManagers.get(player.getPlayerId()) != null){
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        audioManagers.get(player.getPlayerId()).abandonAudioFocusRequest(mFocusRequest);
+                    }else{
+                        audioManagers.get(player.getPlayerId()).abandonAudioFocus(audioFocusChangeListener);
+                    }
+                    audioManagers.remove(player.getPlayerId());
+                }  
                 player.stop();
                 break;
             }
@@ -180,6 +213,75 @@ public class AudioplayersPlugin implements MethodCallHandler {
         return result;
     }
 
+    @SuppressWarnings( "deprecation" )
+    private AudioManager initAudioManger(){
+        AudioManager manager = (AudioManager)activity.getApplicationContext().getSystemService(Context.AUDIO_SERVICE);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            mPlaybackAttributes = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build();
+                        
+            mFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(mPlaybackAttributes)
+                .setAcceptsDelayedFocusGain(true)
+                .setOnAudioFocusChangeListener(audioFocusChangeListener)
+                .build();
+
+            manager.requestAudioFocus(mFocusRequest);
+        }else{
+            manager.requestAudioFocus(audioFocusChangeListener,
+            AudioManager.STREAM_MUSIC,
+            AudioManager.AUDIOFOCUS_GAIN); 
+        }
+        return manager;
+    }
+    @SuppressWarnings( "deprecation" )
+    private AudioManager.OnAudioFocusChangeListener audioFocusChangeListener = new AudioManager.OnAudioFocusChangeListener() {
+        public void onAudioFocusChange(int focusChange) {
+            switch (focusChange) {
+                case AudioManager.AUDIOFOCUS_GAIN:
+                    for (Player player : mediaPlayers.values()) {
+                        if(player.isRespectingAudioFocus()){
+                            if(!player.isActuallyPlaying()){
+                                if(respectAudioFocuses.get(player.getPlayerId())){
+                                    player.play();
+                                    channel.invokeMethod("audio.onFocusChange", buildArguments(player.getPlayerId(), true));
+                                    respectAudioFocuses.replace(player.getPlayerId(),false);
+                                }
+                            } 
+                        }
+                    }
+                    break;
+                case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
+                    for (Player player : mediaPlayers.values()) {
+                        if(player.isRespectingAudioFocus()){
+                            if (player.isActuallyPlaying()) {
+                                respectAudioFocuses.replace(player.getPlayerId(),true);
+                                player.pause();
+                                channel.invokeMethod("audio.onFocusChange", buildArguments(player.getPlayerId(), false));
+                            }
+                        }                                        }
+                    break;
+                case AudioManager.AUDIOFOCUS_LOSS:
+                    for (Player player : mediaPlayers.values()) {
+                        if(player.isRespectingAudioFocus()){
+                            if (player.isActuallyPlaying()) {
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                                    audioManagers.get(player.getPlayerId()).abandonAudioFocusRequest(mFocusRequest);
+                                }else{
+                                    audioManagers.get(player.getPlayerId()).abandonAudioFocus(audioFocusChangeListener);
+                                }
+                                audioManagers.remove(player.getPlayerId());
+                                player.pause();
+                                channel.invokeMethod("audio.onFocusChange", buildArguments(player.getPlayerId(), false));
+                            }
+                        }
+                    }
+                    break;
+            }
+        }
+    };
     private static final class UpdateCallback implements Runnable {
 
         private final WeakReference<Map<String, Player>> mediaPlayers;

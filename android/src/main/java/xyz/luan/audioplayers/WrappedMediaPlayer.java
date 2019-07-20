@@ -18,6 +18,7 @@ public class WrappedMediaPlayer extends Player implements MediaPlayer.OnPrepared
     private float rate = 1.0f;
     private boolean respectSilence;
     private boolean stayAwake;
+    private boolean isRespectingAudioFocus;
     private ReleaseMode releaseMode = ReleaseMode.RELEASE;
     private String playingRoute = "speakers";
 
@@ -114,7 +115,7 @@ public class WrappedMediaPlayer extends Player implements MediaPlayer.OnPrepared
     }
 
     @Override
-    void configAttributes(boolean respectSilence, boolean stayAwake, Context context) {
+    void configAttributes(boolean respectSilence, boolean stayAwake, Context context, boolean isRespectingAudioFocus) {
         if (this.respectSilence != respectSilence) {
             this.respectSilence = respectSilence;
             if (!this.released) {
@@ -125,6 +126,11 @@ public class WrappedMediaPlayer extends Player implements MediaPlayer.OnPrepared
             this.stayAwake = stayAwake;
             if (!this.released && this.stayAwake) {
                 this.player.setWakeMode(context, PowerManager.PARTIAL_WAKE_LOCK);
+            }
+        }
+        if(this.isRespectingAudioFocus != isRespectingAudioFocus){
+            if (!this.released) {
+                this.isRespectingAudioFocus = isRespectingAudioFocus;
             }
         }
     }
@@ -163,6 +169,11 @@ public class WrappedMediaPlayer extends Player implements MediaPlayer.OnPrepared
         return this.playing && this.prepared;
     }
 
+    @Override
+    boolean isRespectingAudioFocus() {
+        return this.isRespectingAudioFocus;
+    }
+    
     /**
      * Playback handling methods
      */
